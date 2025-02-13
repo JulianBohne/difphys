@@ -6,14 +6,16 @@ import math
 particle_radius = 1.0
 particle_mass = 1.0
 
-# n particles -> nx2 matrix
-particles = (torch.rand((10, 2), dtype=torch.float32) - 0.5) * 10# torch.tensor([[0, 0], [0, -2], [0, 2], [2, 0], [5, 0]], dtype=torch.float32)
-particles[0:3] = torch.tensor([[0, 0], [0, -2], [0, 2]], dtype=torch.float32)
-velocities = torch.zeros_like(particles)
-fixed = torch.zeros(particles.shape[0], dtype=torch.float32)
-fixed[0] = 1 # this one is the mouse
-fixed[1] = 1
-fixed[2] = 1
+base_stiffness = 1000
+stiffness = 20
+mouse_stiffness = 1
+
+n = 5
+particles = None
+velocities = None
+fixed = None
+connections = None
+rest_lengths = None
 
 # Get squared distance in xs
 # connections * ((torch.ones_like(connections) * particles[:,0]).T - particles[:,0])**2
@@ -21,29 +23,42 @@ fixed[2] = 1
 # Get connected distances
 # connections * (((particles - (torch.ones_like(connections).unsqueeze(dim=2) * particles).transpose(0, 1))**2).sum(dim=2)).sqrt()
 
-base_stiffness = 1000
-stiffness = 20
-mouse_stiffness = 1
-
 def to_connection_matrix(vec):
     n = round((1 + math.sqrt(1 + 4*2*vec.shape[0])) / 2)
-    assert vec.shape == ((n*n - n)//2,), "The number of elements in the vector does not match the number of elements in an upper triangular matrix without the diagonal."
+    assert vec.shape == ((n*(n - 1))//2,), "The number of elements in the vector does not match the number of elements in an upper triangular matrix without the diagonal."
     indices = torch.triu_indices(n, n, 1)
     connections = torch.zeros((n, n), dtype=vec.dtype)
     connections[indices[0], indices[1]] = vec
     return connections.T + connections
 
-n = particles.shape[0]
-possible_connection_count = (n*n - n) // 2
-connections = to_connection_matrix(torch.ones(possible_connection_count)) * stiffness
-connections[0,:] = 0
-connections[:,0] = 0
+def setup_particles():
+    global particles
+    global velocities
+    global connections
+    global fixed
+    global rest_lengths
+
+    # n particles -> nx2 matrix
+    particles = (torch.rand((n, 2), dtype=torch.float32) - 0.5) * 10# torch.tensor([[0, 0], [0, -2], [0, 2], [2, 0], [5, 0]], dtype=torch.float32)
+    particles[0:3] = torch.tensor([[0, 0], [0, -2], [0, 2]], dtype=torch.float32)
+    velocities = torch.zeros_like(particles)
+    fixed = torch.zeros(particles.shape[0], dtype=torch.float32)
+    fixed[0] = 1 # this one is the mouse
+    fixed[1] = 1
+    fixed[2] = 1
+    possible_connection_count = (n*(n - 1)) // 2
+    connection_amount = 0.25
+    connections = to_connection_matrix(torch.floor(torch.rand((possible_connection_count,), dtype=torch.float32) + connection_amount)) * stiffness
+    connections[0,:] = 0
+    connections[:,0] = 0
+    initial_particle_diffs = particles - (torch.ones_like(connections).unsqueeze(dim=2) * particles).transpose(0, 1)
+    rest_lengths = (initial_particle_diffs**2).sum(dim=2).sqrt()
+
+setup_particles()
 
 # n particles -> nxn matrix 
 # connections = torch.tensor([[0, stiffness, stiffness], [stiffness, 0, stiffness], [stiffness, stiffness, 0]], dtype=torch.float32)
 
-initial_particle_diffs = particles - (torch.ones_like(connections).unsqueeze(dim=2) * particles).transpose(0, 1)
-rest_lengths = (initial_particle_diffs**2).sum(dim=2).sqrt()
 # rest_lengths = torch.tensor([[0, 2, 0], [2, 0, 0], [0, 0, 0]], dtype=torch.float32)
 
 gravity = torch.tensor([0, -9.81], dtype=torch.float32)
@@ -89,6 +104,17 @@ grab_index = 0
 
 while not rl.window_should_close():
 
+    if rl.is_key_pressed(rl.KEY_R):
+        setup_particles()
+    elif rl.is_key_pressed(rl.KEY_UP):
+        n += 1
+        setup_particles()
+    elif rl.is_key_pressed(rl.KEY_DOWN):
+        n -= 1
+        if n < 3:
+            n = 3
+        setup_particles()
+
     rl.begin_drawing()
 
     rl.rl_translatef(rl.get_render_width()/2, rl.get_render_height()/2, 0)
@@ -117,7 +143,7 @@ while not rl.window_should_close():
 
     for i in range(n):
         a_x, a_y = w2s(particles[i])
-        for j in range(n):
+        for j in range(i+1, n):
             if connections[i][j] > 0:
                 b_x, b_y = w2s(particles[j])
                 rl.draw_line(a_x, a_y, b_x, b_y, rl.WHITE)
